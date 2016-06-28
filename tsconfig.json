@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "target": "es6",
+        "outDir": "out",
+        "noLib": false,
+        "sourceMap": true,
+        "rootDir": "src",
+        "declaration": false,
+        "allowJs": false,
+        "experimentalDecorators": true,
+        "pretty": true
+    },
+    "exclude": [
+        "node_modules",
+        "tmp",
+        "out"
+    ]
+}

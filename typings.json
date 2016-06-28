@@ -1,0 +1,9 @@
+{
+  "name": "ltrepopackager",
+  "dependencies": {
+    "bluebird": "registry:dt/bluebird#2.0.0+20160319051630"
+  },
+  "globalDependencies": {
+    "node": "registry:dt/node#6.0.0+20160621231320"
+  }
+}
