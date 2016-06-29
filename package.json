@@ -1,6 +1,6 @@
 {
   "name": "repopackager",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Simple package manager for packages hosted in a single git repository.",
   "main": "./out/index.js",
   "readme": "./README.md",
