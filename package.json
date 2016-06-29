@@ -1,13 +1,24 @@
 {
   "name": "repopackager",
-  "version": "0.0.1",
+  "version": "0.0.5",
   "description": "Simple package manager for packages hosted in a single git repository.",
   "main": "./out/index.js",
   "readme": "./README.md",
+  "typings": "./out/typings/repopackager.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Brian Ojeda",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sgtoj/repopackager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sgtoj/repopackager/issues"
+  },
+  "files": [
+    "out"
+  ],
   "license": "MIT",
   "devDependencies": {
     "tslint": "^3.11.0",
