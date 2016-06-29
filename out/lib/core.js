@@ -23,6 +23,232 @@ class RepositoryError extends Error {
 class RepositoryNotUniquePackageError extends Error {
 }
 /**
+ * Object representing an package.
+ *
+ * @export
+ * @class Package
+ * @extends {EE.EventEmitter}
+ * @implements {Package}
+ */
+class Package extends EE.EventEmitter {
+    /**
+     * Creates an instance of Package.
+     *
+     * @param {string} repoPath Reposistory's absolute local path.
+     * @param {string} packagePath Package's absolute local path.
+     * @param {{}} [rules] Object containing the rules used parse scan directory and parse it's configuration file.
+     */
+    constructor(repoPath, packagePath, rules) {
+        super();
+        this._configFile = path.basename(packagePath);
+        this._absoluteDirPath = path.dirname(packagePath);
+        this.path = this._absoluteDirPath.replace(repoPath, "");
+    }
+    get isValid() {
+        if (this.guid && this.name) {
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
+    get lastWalk() {
+        return this._lastWalk;
+    }
+    walk(rules) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this._readConfigFile();
+            yield this._parse(rules);
+            yield this._search();
+            if (!this.isValid) {
+                this.emit("error", new PackageMissingRequirementError("not a valid package due to missing required properties (e.g. name, guid)"), this);
+                return;
+            }
+            if (this._hasWalked) {
+                this.emit("updated", this);
+            }
+            else {
+                this._hasWalked = true;
+                this.emit("created", this);
+            }
+            this._lastWalk = new Date;
+        });
+    }
+    /**
+     * Parse the package's information file.
+     *
+     * @param {{}} rules JSON object with the list of properties to extract from the information file via RegEx patterns.
+     */
+    _parse(rules) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this._rawConfigContents === null)
+                return;
+            for (let property in rules) {
+                if (typeof rules[property] === "object") {
+                    this[property] = yield this._parse(rules);
+                    continue;
+                }
+                let pattern = new RegExp(rules[property], "i");
+                let matches = this._rawConfigContents.match(pattern);
+                if (matches)
+                    this[property] = matches[1].trim();
+            }
+        });
+    }
+    _search(directory, filter) {
+        return __awaiter(this, void 0, void 0, function* () {
+            directory = directory || this._absoluteDirPath;
+            filter = filter || ".+";
+            this.items = [];
+            try {
+                let files = yield fsAsync.readdirAsync(directory);
+                for (let file of files) {
+                    let fullPath = path.resolve(directory, file);
+                    if (yield common_1.isDirectory(fullPath)) {
+                        yield this._search(fullPath, filter);
+                    }
+                    else {
+                        if (!fullPath.match(filter))
+                            continue;
+                        let itemRelativePath = fullPath.replace(this._absoluteDirPath, "");
+                        this.items.push(itemRelativePath);
+                    }
+                }
+            }
+            catch (err) {
+                console.log(err);
+            }
+        });
+    }
+    /**
+     * Checks for the content from package's raw information file.
+     *
+     * @private
+     */
+    _readConfigFile() {
+        return __awaiter(this, void 0, void 0, function* () {
+            let absolutePath = path.join(this._absoluteDirPath, this._configFile);
+            let doesPathExists = yield common_1.doesPathExist(absolutePath);
+            if (!this._rawConfigContents && doesPathExists)
+                this._rawConfigContents = yield fsAsync.readFileAsync(absolutePath, "utf8");
+            return this._rawConfigContents !== null;
+        });
+    }
+}
+/**
+ * Object representing a package repository.
+ *
+ * @export
+ * @class Repository
+ * @extends {EE.EventEmitter}
+ * @implements {Repository}
+ */
+class Repository extends EE.EventEmitter {
+    /**
+     * Creates an instance of Repository.
+     *
+     * @param {RepoSettings} options Object containing the defintion of repostiory and its packages.
+     */
+    constructor(options) {
+        super();
+        this.packages = {};
+        this.invalidPackages = [];
+        this.name = options.name;
+        this.dir = options.dir;
+        this.packageDefinition = options.packageDefinition;
+        this._walkQueue = new common_1.EEQueue();
+    }
+    /**
+     * Walks the repository for packages.
+     */
+    scan() {
+        return __awaiter(this, void 0, void 0, function* () {
+            this.emit("scanning", this);
+            this._walkQueue.once("emptied", this._onWalkQueueEmptied.bind(this));
+            yield this._populateWalkQueue();
+            yield this._processWalkQueue();
+        });
+    }
+    getPackage(guid) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this.packages[guid];
+        });
+    }
+    _processWalkQueue() {
+        return __awaiter(this, void 0, void 0, function* () {
+            // double bang operator(s)
+            while (this._walkQueue.length) {
+                let dir = this._walkQueue.next();
+                yield this._walkPkgDir(dir);
+            }
+        });
+    }
+    /**
+     * Recurses the repository's directories.
+     */
+    _populateWalkQueue(directory, filter) {
+        return __awaiter(this, void 0, void 0, function* () {
+            directory = directory || this.dir;
+            filter = this.packageDefinition.configFileName || "README.md";
+            try {
+                let files = yield fsAsync.readdirAsync(directory);
+                for (let file of files) {
+                    let fullName = path.resolve(directory, file);
+                    if (yield common_1.isDirectory(fullName)) {
+                        yield this._populateWalkQueue(fullName, filter);
+                    }
+                    else {
+                        if (!fullName.match(filter))
+                            continue;
+                        this._walkQueue.push(fullName);
+                    }
+                }
+            }
+            catch (err) {
+                this.emit("error", err);
+            }
+        });
+    }
+    _isPkgGuidUnqiue(pkg) {
+        return this.packages[pkg.guid] !== null;
+    }
+    _walkPkgDir(file) {
+        return __awaiter(this, void 0, void 0, function* () {
+            let repoPackage = new Package(this.dir, file);
+            repoPackage.on("error", this._onPkgError.bind(this));
+            repoPackage.on("created", this._onPkgCreated.bind(this));
+            yield repoPackage.walk(this.packageDefinition.configParseRules);
+        });
+    }
+    _addPkg(pkg) {
+        if (this.packages[pkg.guid]) {
+            this.invalidPackages.push(pkg);
+            this.emit("error", new RepositoryNotUniquePackageError("another package with the same GUID exists"), pkg);
+            return;
+        }
+        this.packages[pkg.guid] = pkg;
+        this.emit("packageAdded", { repository: this, package: pkg });
+        console.log(`New package added: ${JSON.stringify({ name: pkg.name, guid: pkg.guid, path: pkg.path })}`);
+    }
+    _onWalkQueueEmptied() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this._hasCompletedScan) {
+                this.emit("ready", this);
+            }
+            this._hasCompletedScan = true;
+            this.lastscan = new Date;
+        });
+    }
+    _onPkgCreated(pkg) {
+        this._addPkg(pkg);
+    }
+    _onPkgError(err, pkg) {
+        if (!pkg.isValid)
+            this.invalidPackages.push(pkg);
+        this.emit("error", err);
+    }
+}
+/**
  * Package Manager object.
  *
  * @class PackageManager
@@ -153,249 +379,19 @@ class PackageManager extends EE.EventEmitter {
         this._zipper.finalize();
         return zipStream;
     }
-    _onRepoReady(repo, args) {
-        args = args || {};
-        args["repository"] = repo;
-        this.emit("repoReady", this, repo);
+    _onRepoReady(repo) {
+        let details = { manager: this, repository: repo };
+        this.emit("repoReady", details);
     }
-    _onRepoError(err, args) {
-        args = args || {};
-        this.emit("error", err, args);
+    _onRepoError(err) {
+        this.emit("error", err);
     }
-    _onPackageAdded(repo, args) {
-        args.repository = repo;
-        args["manager"] = this;
-        this.emit("packageAdded", this, args);
+    _onPackageAdded(details) {
+        details = details || {};
+        details["manager"] = this;
+        this.emit("packageAdded", details);
     }
 }
 exports.PackageManager = PackageManager;
-/**
- * Object representing an package.
- *
- * @export
- * @class Package
- * @extends {EE.EventEmitter}
- * @implements {Package}
- */
-class Package extends EE.EventEmitter {
-    /**
-     * Creates an instance of Package.
-     *
-     * @param {string} repoPath Reposistory's absolute local path.
-     * @param {string} packagePath Package's absolute local path.
-     * @param {{}} [rules] Object containing the rules used parse scan directory and parse it's configuration file.
-     */
-    constructor(repoPath, packagePath, rules) {
-        super();
-        this._configFile = path.basename(packagePath);
-        this._absoluteDirPath = path.dirname(packagePath);
-        this.path = this._absoluteDirPath.replace(repoPath, "");
-    }
-    get isValid() {
-        if (this.guid && this.name) {
-            return true;
-        }
-        else {
-            return false;
-        }
-    }
-    get lastWalk() {
-        return this._lastWalk;
-    }
-    walk(rules) {
-        return __awaiter(this, void 0, void 0, function* () {
-            yield this._readConfigFile();
-            yield this._parse(rules);
-            yield this._search();
-            if (!this.isValid) {
-                this.emit("error", new PackageMissingRequirementError("not a valid package due to missing required properties (e.g. name, guid)"), { package: this });
-                return;
-            }
-            if (this._hasWalked) {
-                this.emit("updated", this);
-            }
-            else {
-                this._hasWalked = true;
-                this.emit("created", this);
-            }
-            this._lastWalk = new Date;
-        });
-    }
-    /**
-     * Parse the package's information file.
-     *
-     * @param {{}} rules JSON object with the list of properties to extract from the information file via RegEx patterns.
-     */
-    _parse(rules) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (this._rawConfigContents === null)
-                return;
-            for (let property in rules) {
-                if (typeof rules[property] === "object") {
-                    this[property] = yield this._parse(rules);
-                    continue;
-                }
-                let pattern = new RegExp(rules[property], "i");
-                let matches = this._rawConfigContents.match(pattern);
-                if (matches)
-                    this[property] = matches[1].trim();
-            }
-        });
-    }
-    _search(directory, filter) {
-        return __awaiter(this, void 0, void 0, function* () {
-            directory = directory || this._absoluteDirPath;
-            filter = filter || ".+";
-            this.items = [];
-            try {
-                let files = yield fsAsync.readdirAsync(directory);
-                for (let file of files) {
-                    let fullPath = path.resolve(directory, file);
-                    if (yield common_1.isDirectory(fullPath)) {
-                        yield this._search(fullPath, filter);
-                    }
-                    else {
-                        if (!fullPath.match(filter))
-                            continue;
-                        let itemRelativePath = fullPath.replace(this._absoluteDirPath, "");
-                        this.items.push(itemRelativePath);
-                    }
-                }
-            }
-            catch (err) {
-                console.log(err);
-            }
-        });
-    }
-    /**
-     * Checks for the content from package's raw information file.
-     *
-     * @private
-     */
-    _readConfigFile() {
-        return __awaiter(this, void 0, void 0, function* () {
-            let absolutePath = path.join(this._absoluteDirPath, this._configFile);
-            let doesPathExists = yield common_1.doesPathExist(absolutePath);
-            if (!this._rawConfigContents && doesPathExists)
-                this._rawConfigContents = yield fsAsync.readFileAsync(absolutePath, "utf8");
-            return this._rawConfigContents !== null;
-        });
-    }
-}
-/**
- * Object representing a package repository.
- *
- * @export
- * @class Repository
- * @extends {EE.EventEmitter}
- * @implements {Repository}
- */
-class Repository extends EE.EventEmitter {
-    /**
-     * Creates an instance of Repository.
-     *
-     * @param {RepoSettings} options Object containing the defintion of repostiory and its packages.
-     */
-    constructor(options) {
-        super();
-        this.packages = {};
-        this.invalidPackages = [];
-        this.name = options.name;
-        this.dir = options.dir;
-        this.packageDefinition = options.packageDefinition;
-        this._walkQueue = new common_1.EEQueue();
-    }
-    /**
-     * Walks the repository for packages.
-     */
-    scan() {
-        return __awaiter(this, void 0, void 0, function* () {
-            this.emit("scanning");
-            this._walkQueue.once("emptied", this._onWalkQueueEmptied.bind(this));
-            yield this._populateWalkQueue();
-            yield this._processWalkQueue();
-        });
-    }
-    getPackage(guid) {
-        return __awaiter(this, void 0, void 0, function* () {
-            return this.packages[guid];
-        });
-    }
-    _processWalkQueue() {
-        return __awaiter(this, void 0, void 0, function* () {
-            // double bang operator(s)
-            while (this._walkQueue.length) {
-                let dir = this._walkQueue.next();
-                yield this._walkPkgDir(dir);
-            }
-        });
-    }
-    /**
-     * Recurses the repository's directories.
-     */
-    _populateWalkQueue(directory, filter) {
-        return __awaiter(this, void 0, void 0, function* () {
-            directory = directory || this.dir;
-            filter = this.packageDefinition.configFileName || "README.md";
-            try {
-                let files = yield fsAsync.readdirAsync(directory);
-                for (let file of files) {
-                    let fullName = path.resolve(directory, file);
-                    if (yield common_1.isDirectory(fullName)) {
-                        yield this._populateWalkQueue(fullName, filter);
-                    }
-                    else {
-                        if (!fullName.match(filter))
-                            continue;
-                        this._walkQueue.push(fullName);
-                    }
-                }
-            }
-            catch (err) {
-                this.emit("error", err, { repository: this });
-            }
-        });
-    }
-    _isPkgGuidUnqiue(pkg) {
-        return this.packages[pkg.guid] !== null;
-    }
-    _walkPkgDir(file) {
-        return __awaiter(this, void 0, void 0, function* () {
-            let repoPackage = new Package(this.dir, file);
-            repoPackage.on("error", this._onPkgError.bind(this));
-            repoPackage.on("created", this._onPkgCreated.bind(this));
-            yield repoPackage.walk(this.packageDefinition.configParseRules);
-        });
-    }
-    _addPkg(pkg) {
-        if (this.packages[pkg.guid]) {
-            this.invalidPackages.push(pkg);
-            this.emit("error", new RepositoryNotUniquePackageError("another package with the same GUID exists"), { repostory: this, package: pkg });
-            return;
-        }
-        this.packages[pkg.guid] = pkg;
-        this.emit("packageAdded", this, pkg);
-        console.log(`New package added: ${JSON.stringify({ name: pkg.name, guid: pkg.guid, path: pkg.path })}`);
-    }
-    _onWalkQueueEmptied() {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (!this._hasCompletedScan) {
-                this.emit("ready", this, null);
-            }
-            this._hasCompletedScan = true;
-            this.lastscan = new Date;
-        });
-    }
-    _onPkgCreated(pkg) {
-        this._addPkg(pkg);
-    }
-    _onPkgError(err, args) {
-        if (!args.package.isValid)
-            this.invalidPackages.push(args.package);
-        args = args || {};
-        args["repository"] = this;
-        this.emit("error", err, args);
-    }
-}
-exports.pkgmanager = new PackageManager();
+exports.repopackager = new PackageManager();
 //# sourceMappingURL=core.js.map
